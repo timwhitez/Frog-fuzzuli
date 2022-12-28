@@ -2,22 +2,12 @@ package main
 
 import (
 	"bufio"
-	"crypto/tls"
 	"fmt"
+	"github.com/projectdiscovery/goflags"
 	"log"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
-
-	"github.com/gammazero/workerpool"
-	"github.com/hashicorp/go-retryablehttp"
-	"github.com/projectdiscovery/goflags"
-	"github.com/schollz/progressbar/v3"
 )
 
 var urls, paths, methods []string
@@ -40,11 +30,7 @@ var mime_types = []string{
 	"application/x-msdos-program",
 }
 
-var bar = progressbar.Default(-1, "request count")
-
 func main() {
-
-	banner()
 
 	options = ParseOptions()
 
@@ -77,18 +63,13 @@ func main() {
 		paths = strings.Split(options.paths, "")
 	}
 
-	timeInfo("starting")
-	defer timeInfo("ending")
-
-	wp := workerpool.New(options.worker)
-
 	for _, url := range urls {
 		url := url
-		wp.Submit(func() {
-			start(url)
-		})
+
+		start(url)
+
 	}
-	wp.StopWait()
+
 }
 
 func start(domain string) {
@@ -124,16 +105,34 @@ func getAllCombination(domain string) {
 		}
 	}
 
-	wpx := workerpool.New(16)
-
 	for _, word := range generate_wordlist {
-		word := word
-		wpx.Submit(func() {
-			headRequest(domain, word)
-		})
+		headRequest(domain, word)
 	}
-	wpx.StopWait()
 
+}
+
+func headRequest(domain string, word string) {
+	for _, e := range extensions {
+		for _, path := range paths {
+			url := domain + path + options.prefix + word + options.suffix + e
+
+			if options.print {
+				// If the file doesn't exist, create it, or append to the file
+				f, err := os.OpenFile(options.wFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if _, err := f.Write([]byte(url + "\n")); err != nil {
+					log.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					log.Fatal(err)
+				}
+			} else {
+				fmt.Println(url)
+			}
+		}
+	}
 }
 
 func regularDomain(domain string, wordlist *[]string) {
@@ -275,108 +274,20 @@ func readFromFile() {
 	}
 }
 
-func requestBuilder(url string) *http.Request {
-
-	req, _ := http.NewRequest(options.http_method, url, nil)
-	req.Header.Add("User-Agent", options.user_agent)
-	return req
-
-}
-
-func httpClient(proxy string) *http.Client {
-
-	tr := &http.Transport{
-		MaxIdleConns:        100,
-		MaxConnsPerHost:     100,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:     time.Second * 5,
-		DisableKeepAlives:   false,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
-		DialContext: (&net.Dialer{
-			Timeout:   time.Second * 10,
-			KeepAlive: time.Second * 10,
-		}).DialContext,
-	}
-
-	if proxy != "" {
-		if p, err := url.Parse(options.proxy); err == nil {
-			tr.Proxy = http.ProxyURL(p)
-		}
-	}
-
-	retryClient := retryablehttp.NewClient()
-	retryClient.RetryMax = 3
-	retryClient.RetryWaitMax = time.Second * 3
-	retryClient.Logger = nil
-	retryClient.HTTPClient.Transport = tr
-	httpClient := retryClient.StandardClient()
-
-	return httpClient
-
-}
-
-func headRequest(domain string, word string) {
-	for _, e := range extensions {
-		for _, path := range paths {
-			url := domain + path + options.prefix + word + options.suffix + e
-
-			if options.print {
-				fmt.Println("[-]", url)
-			}
-
-			client := httpClient(options.proxy)
-			resp, err := client.Do(requestBuilder(url))
-
-			if options.http_method == "GET" {
-				defer resp.Body.Close()
-			}
-
-			bar.Add(1)
-
-			if err == nil {
-				if _, ok := resp.Header["Content-Length"]; ok {
-					content_length, _ := strconv.Atoi(resp.Header["Content-Length"][0])
-					if _, ok := resp.Header["Content-Type"]; ok {
-						content_type := resp.Header["Content-Type"][0]
-						is_found := contains(mime_types, content_type)
-						if content_length > options.min_content_length && is_found && resp.StatusCode == options.status_code {
-							info := fmt.Sprintf("\n[+] Possible sensitive file was found. URL: [%s] CT: [%s] CL: [%d] SC: [%d]", url, content_type, content_length, resp.StatusCode)
-							fmt.Println(string("\033[32m")+info, string("\033[0m"))
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-func timeInfo(t string) {
-	ctime := fmt.Sprintf("\n[*] Scan "+t+" time: %s", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Println(string("\033[36m") + ctime + string("\033[0m"))
-}
-
 type Options struct {
-	content_type       string
-	http_method        string
-	user_agent         string
-	extension          string
-	exclude            string
-	replace            string
-	method             string
-	prefix             string
-	suffix             string
-	remove             string
-	paths              string
-	file               string
-	proxy              string
-	worker             int
-	timeout            int
-	status_code        int
-	domain_length      int
-	min_content_length int
-	version            bool
-	print              bool
-	help               bool
+	extension     string
+	exclude       string
+	replace       string
+	method        string
+	prefix        string
+	suffix        string
+	remove        string
+	paths         string
+	file          string
+	wFileName     string
+	domain_length int
+	print         bool
+	help          bool
 }
 
 func ParseOptions() *Options {
@@ -385,11 +296,10 @@ func ParseOptions() *Options {
 	flagSet.SetDescription(`fuzzuli is a fuzzing tool that aims to find critical backup files by creating a dynamic wordlist based on the domain.`)
 
 	createGroup(flagSet, "General Options", "GENERAL OPTIONS",
-		flagSet.IntVar(&options.worker, "w", 16, "worker count"),
 		flagSet.StringVar(&options.file, "f", "", "input file containing list of host/domain"),
 		flagSet.StringVar(&options.paths, "pt", "/", "paths. separate with commas to use multiple paths. e.g. /,/db/,/old/"),
-		flagSet.BoolVar(&options.print, "p", false, "print urls that is sent request"),
-		flagSet.BoolVar(&options.version, "v", false, "print version"),
+		flagSet.BoolVar(&options.print, "p", false, "writedown urls"),
+		flagSet.StringVar(&options.wFileName, "wf", "logPath.txt", "output filename"),
 	)
 
 	createGroup(flagSet, "wordlist options", "WORDLIST OPTIONS",
@@ -406,26 +316,7 @@ func ParseOptions() *Options {
 		flagSet.IntVar(&options.domain_length, "dl", 40, "match domain length that specified."),
 	)
 
-	createGroup(flagSet, "matcher options", "MATCHER OPTIONS",
-		flagSet.StringVar(&options.content_type, "ct", "", "match response with specified content type"),
-		flagSet.IntVar(&options.status_code, "sc", 200, "match response with specified status code"),
-		flagSet.IntVar(&options.min_content_length, "cl", 100, "match response with specified minimum content length. e.g. >100"),
-	)
-
-	createGroup(flagSet, "http options", "HTTP OPTIONS",
-		flagSet.IntVar(&options.timeout, "to", 10, "timeout in seconds."),
-		flagSet.StringVar(&options.user_agent, "ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) Gecko/20100101 Firefox/100.0", "user agent"),
-		flagSet.StringVar(&options.http_method, "hm", "HEAD", "HTTP Method."),
-		flagSet.StringVar(&options.proxy, "px", "", "http proxy to use"),
-	)
-
 	_ = flagSet.Parse()
-
-	Version := "v1.1.2"
-	if options.version {
-		fmt.Println("Current Version:", Version)
-		os.Exit(0)
-	}
 
 	return options
 }
@@ -435,18 +326,4 @@ func createGroup(flagSet *goflags.FlagSet, groupName, description string, flags 
 	for _, currentFlag := range flags {
 		currentFlag.Group(groupName)
 	}
-}
-
-func banner() {
-	fmt.Println(`
-  __                               _   _ 
- / _|                             | | (_)
-| |_   _   _   ____  ____  _   _  | |  _ 
-|  _| | | | | |_  / |_  / | | | | | | | |
-| |   | |_| |  / /   / /  | |_| | | | | |
-|_|    \__,_| /___| /___|  \__,_| |_| |_|
-
-musana.net | @musana
---------------------------------------------`)
-
 }
