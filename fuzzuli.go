@@ -15,21 +15,6 @@ var urls, paths, methods []string
 var options *Options
 var extensions = []string{".rar", ".zip", ".tar.gz", ".tar", ".gz", ".jar", ".7z", ".bz2", ".sql", ".backup", ".war", ".bak", ".dll"}
 
-var mime_types = []string{
-	"application/octet-stream",
-	"application/x-bzip",
-	"application/x-bzip2",
-	"application/gzip",
-	"application/java-archive",
-	"application/vnd.rar",
-	"application/x-sh",
-	"application/x-tar",
-	"application/zip",
-	"application/x-7z-compressed",
-	"application/x-msdownload",
-	"application/x-msdos-program",
-}
-
 func main() {
 
 	options = ParseOptions()
